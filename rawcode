@@ -15,7 +15,7 @@ BluetoothSerial SerialBT;
 // 常量定义
 const int GPS_BAUD_RATE = 115200;
 const int SERIAL_BAUD_RATE = 115200;
-const char* BT_DEVICE_NAME = "Air551G-GNSS";
+const char* BT_DEVICE_NAME = "Global-GNSS";
 const int LED_ERROR_PIN = 2; // 使用GPIO2
 const int GPS_BUFFER_SIZE = 1024;
 
