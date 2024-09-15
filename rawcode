@@ -1,84 +1,112 @@
 #include <BluetoothSerial.h>
 
-// 检查是否启用了蓝牙功能
+// Check if Bluetooth is enabled
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error Bluetooth is not enabled! Please run `make menuconfig` to enable it
 #endif
 
-// 检查是否允许使用蓝牙经典模式
+// Check if Serial Bluetooth is enabled
 #if !defined(CONFIG_BT_SPP_ENABLED)
 #error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
 #endif
 
 BluetoothSerial SerialBT;
 
-// 常量定义
+// Constants
 const int GPS_BAUD_RATE = 115200;
 const int SERIAL_BAUD_RATE = 115200;
 const char* BT_DEVICE_NAME = "Global-GNSS";
-const int LED_ERROR_PIN = 2; // 使用GPIO2
+const int LED_ERROR_PIN = 2; // Using GPIO2
 const int GPS_BUFFER_SIZE = 1024;
+const int ERROR_LED_BLINK_COUNT = 10; // LED blink count on error
+const int ERROR_BLINK_INTERVAL = 100; // Time in milliseconds for each blink
 
-// 全局变量
+// Global variables
 char gpsBuffer[GPS_BUFFER_SIZE];
 int bufferIndex = 0;
+bool errorState = false;
+int blinkCounter = 0;
+unsigned long lastBlinkTime = 0;
 
 void setup() {
-  // 初始化串口
+  // Initialize serial ports
   Serial.begin(SERIAL_BAUD_RATE);
   Serial2.begin(GPS_BAUD_RATE, SERIAL_8N1, 16, 17);  // RX: GPIO16, TX: GPIO17
-
-  // 初始化蓝牙
+  
+  // Initialize Bluetooth
   SerialBT.begin(BT_DEVICE_NAME);
   Serial.println("Bluetooth device started, you can pair it with Bluetooth!");
 
-  // 初始化LED引脚
+  // Initialize LED pin
   pinMode(LED_ERROR_PIN, OUTPUT);
+  digitalWrite(LED_ERROR_PIN, LOW);
 }
 
 void loop() {
-  // 读取GPS数据
+  readGPS();
+  handleBluetooth();
+  handleErrorLED();
+}
+
+void readGPS() {
+  // Read GPS data if available
   while (Serial2.available()) {
     char c = Serial2.read();
     
-    // 将字符添加到缓冲区
+    // Add character to the buffer
     if (bufferIndex < GPS_BUFFER_SIZE - 1) {
       gpsBuffer[bufferIndex++] = c;
     }
-    
-    // 如果接收到换行符，处理并发送数据
+
+    // Process NMEA sentence if a newline is received
     if (c == '\n') {
-      gpsBuffer[bufferIndex] = '\0';  // 添加字符串结束符
-      
-      // 检查是否是有效的NMEA语句
+      gpsBuffer[bufferIndex] = '\0';  // Null-terminate the string
+
+      // Check if it's a valid NMEA sentence
       if (gpsBuffer[0] == '$') {
-        // 通过蓝牙发送数据
+        // Send the sentence via Bluetooth in one call
         SerialBT.write((uint8_t*)gpsBuffer, bufferIndex);
-        
-        // 在串口打印NMEA语句
+
+        // Print the sentence to the serial monitor
         Serial.print(gpsBuffer);
+      } else {
+        logError("Invalid NMEA sentence received");
       }
-      
-      // 重置缓冲区
+
+      // Reset the buffer
       bufferIndex = 0;
     }
   }
+}
 
-  // 处理蓝牙接收到的数据（如果需要）
+void handleBluetooth() {
+  // Handle incoming Bluetooth data (if needed)
   if (SerialBT.available()) {
     Serial.write(SerialBT.read());
+  }
+}
+
+void handleErrorLED() {
+  // Non-blocking LED error blinking logic
+  if (errorState && blinkCounter < ERROR_LED_BLINK_COUNT * 2) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastBlinkTime >= ERROR_BLINK_INTERVAL) {
+      lastBlinkTime = currentTime;
+      digitalWrite(LED_ERROR_PIN, !digitalRead(LED_ERROR_PIN)); // Toggle LED
+      blinkCounter++;
+    }
+  } else {
+    digitalWrite(LED_ERROR_PIN, LOW); // Make sure LED is off when done
+    errorState = false; // Reset error state after blinking
   }
 }
 
 void logError(const char* message) {
   Serial.print("ERROR: ");
   Serial.println(message);
-  
-  // 错误LED闪烁
-  for (int i = 0; i < 10; i++) { // 闪烁10次
-    digitalWrite(LED_ERROR_PIN, HIGH);
-    delay(100);  // 闪烁时间
-    digitalWrite(LED_ERROR_PIN, LOW);
-    delay(100);
-  }
+
+  // Start LED blinking sequence
+  errorState = true;
+  blinkCounter = 0;
+  lastBlinkTime = millis();
 }
