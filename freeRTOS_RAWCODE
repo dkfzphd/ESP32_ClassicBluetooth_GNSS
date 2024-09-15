@@ -1,0 +1,144 @@
+#include <BluetoothSerial.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/timers.h>
+
+// Check if Bluetooth is enabled
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to enable it
+#endif
+
+// Check if Serial Bluetooth is enabled
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
+#endif
+
+BluetoothSerial SerialBT;
+
+// Constants
+const int GPS_BAUD_RATE = 115200;
+const int SERIAL_BAUD_RATE = 115200;
+const char* BT_DEVICE_NAME = "Global-GNSS";
+const int LED_ERROR_PIN = 2; // Using GPIO2
+const int GPS_BUFFER_SIZE = 1024;
+const int ERROR_LED_BLINK_COUNT = 10; // LED blink count on error
+const int ERROR_BLINK_INTERVAL = 100; // Time in milliseconds for each blink
+
+// Global variables
+char gpsBuffer[GPS_BUFFER_SIZE];
+int bufferIndex = 0;
+bool errorState = false;
+int blinkCounter = 0;
+unsigned long lastBlinkTime = 0;
+
+// Task handles
+TaskHandle_t gpsTaskHandle = NULL;
+TaskHandle_t bluetoothTaskHandle = NULL;
+TaskHandle_t errorLedTaskHandle = NULL;
+
+void setup() {
+  // Initialize serial ports
+  Serial.begin(SERIAL_BAUD_RATE);
+  Serial2.begin(GPS_BAUD_RATE, SERIAL_8N1, 16, 17);  // RX: GPIO16, TX: GPIO17
+
+  // Initialize Bluetooth
+  SerialBT.begin(BT_DEVICE_NAME);
+  Serial.println("Bluetooth device started, you can pair it with Bluetooth!");
+
+  // Initialize LED pin
+  pinMode(LED_ERROR_PIN, OUTPUT);
+  digitalWrite(LED_ERROR_PIN, LOW);
+
+  // Create tasks
+  xTaskCreate(gpsTask, "GPS Task", 2048, NULL, 1, &gpsTaskHandle);
+  xTaskCreate(bluetoothTask, "Bluetooth Task", 2048, NULL, 1, &bluetoothTaskHandle);
+  xTaskCreate(errorLedTask, "Error LED Task", 2048, NULL, 1, &errorLedTaskHandle);
+}
+
+void loop() {
+  // No code here, as FreeRTOS tasks are used
+}
+
+void gpsTask(void *pvParameters) {
+  while (true) {
+    readGPS();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Small delay to yield processor
+  }
+}
+
+void bluetoothTask(void *pvParameters) {
+  while (true) {
+    handleBluetooth();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Small delay to yield processor
+  }
+}
+
+void errorLedTask(void *pvParameters) {
+  while (true) {
+    handleErrorLED();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Small delay to yield processor
+  }
+}
+
+void readGPS() {
+  // Read GPS data if available
+  while (Serial2.available()) {
+    char c = Serial2.read();
+    
+    // Add character to the buffer
+    if (bufferIndex < GPS_BUFFER_SIZE - 1) {
+      gpsBuffer[bufferIndex++] = c;
+    }
+
+    // Process NMEA sentence if a newline is received
+    if (c == '\n') {
+      gpsBuffer[bufferIndex] = '\0';  // Null-terminate the string
+
+      // Check if it's a valid NMEA sentence
+      if (gpsBuffer[0] == '$') {
+        // Send the sentence via Bluetooth in one call
+        SerialBT.write((uint8_t*)gpsBuffer, bufferIndex);
+
+        // Print the sentence to the serial monitor
+        Serial.print(gpsBuffer);
+      } else {
+        logError("Invalid NMEA sentence received");
+      }
+
+      // Reset the buffer
+      bufferIndex = 0;
+    }
+  }
+}
+
+void handleBluetooth() {
+  // Handle incoming Bluetooth data (if needed)
+  if (SerialBT.available()) {
+    Serial.write(SerialBT.read());
+  }
+}
+
+void handleErrorLED() {
+  // Non-blocking LED error blinking logic
+  if (errorState && blinkCounter < ERROR_LED_BLINK_COUNT * 2) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastBlinkTime >= ERROR_BLINK_INTERVAL) {
+      lastBlinkTime = currentTime;
+      digitalWrite(LED_ERROR_PIN, !digitalRead(LED_ERROR_PIN)); // Toggle LED
+      blinkCounter++;
+    }
+  } else {
+    digitalWrite(LED_ERROR_PIN, LOW); // Make sure LED is off when done
+    errorState = false; // Reset error state after blinking
+  }
+}
+
+void logError(const char* message) {
+  Serial.print("ERROR: ");
+  Serial.println(message);
+
+  // Start LED blinking sequence
+  errorState = true;
+  blinkCounter = 0;
+  lastBlinkTime = millis();
+}
